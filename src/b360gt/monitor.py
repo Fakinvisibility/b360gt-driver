@@ -152,7 +152,9 @@ def _nvidia_metrics() -> tuple[float | None, float | None]:
             check=False,
             shell=False,
             creationflags=(
-                subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                if sys.platform == "win32"
+                else 0
             ),
         )
         first = result.stdout.splitlines()[0].split(",")

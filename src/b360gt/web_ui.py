@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import re
+import signal
 import threading
 import tempfile
 import time
@@ -31,7 +32,7 @@ from .media import (
     render_preview_jpeg,
 )
 from .media_policy import MAX_VIDEO_SIZE
-from .monitor import OverlayRenderer
+from .monitor import OverlayConfig, OverlayRenderer
 from .usb_transport import probe, stream_frames
 
 MAX_UPLOAD_SIZE = MAX_VIDEO_SIZE
@@ -40,10 +41,14 @@ DISPLAY_KEEPALIVE_RATE = 2.0
 CHANNEL_BUSY_MESSAGE = (
     "显示通道已被其他程序占用；请关闭 Myth.Cool 或其他 B360GT 后端后重试"
 )
+CHANNEL_CONFLICT_REFRESH_SECONDS = 3.0
+_channel_conflict_lock = threading.Lock()
+_channel_conflict_cache: list[str] = []
+_channel_conflict_refreshing = False
+_next_channel_conflict_refresh = 0.0
 
 
-def channel_conflicts() -> list[str]:
-    """Inspect process metadata without opening or claiming the USB device."""
+def _scan_channel_conflicts() -> list[str]:
     conflicts: set[str] = set()
     current_pid = os.getpid()
     own_processes = {current_pid}
@@ -78,6 +83,38 @@ def channel_conflicts() -> list[str]:
     return sorted(conflicts)
 
 
+def _refresh_channel_conflicts() -> None:
+    global _channel_conflict_cache, _channel_conflict_refreshing
+    try:
+        conflicts = _scan_channel_conflicts()
+    finally:
+        with _channel_conflict_lock:
+            if "conflicts" in locals():
+                _channel_conflict_cache = conflicts
+            _channel_conflict_refreshing = False
+
+
+def channel_conflicts() -> list[str]:
+    """Return cached conflicts and refresh the slow Windows scan in background."""
+    global _channel_conflict_refreshing, _next_channel_conflict_refresh
+    now = time.monotonic()
+    with _channel_conflict_lock:
+        if (
+            now >= _next_channel_conflict_refresh
+            and not _channel_conflict_refreshing
+        ):
+            _channel_conflict_refreshing = True
+            _next_channel_conflict_refresh = (
+                now + CHANNEL_CONFLICT_REFRESH_SECONDS
+            )
+            threading.Thread(
+                target=_refresh_channel_conflicts,
+                name="b360gt-channel-conflicts",
+                daemon=True,
+            ).start()
+        return list(_channel_conflict_cache)
+
+
 def _playback_error_message(exc: Exception) -> str:
     text = str(exc).casefold()
     if isinstance(exc, PermissionError) or (
@@ -105,11 +142,60 @@ def _upload_directory() -> Path:
     return directory
 
 
+class SwitchableMediaFrames:
+    """Yield frames from the latest media without reopening the USB session."""
+
+    def __init__(
+        self,
+        media: str | Path,
+        image_transform,
+        stop_event: threading.Event | None = None,
+    ) -> None:
+        self._lock = threading.Lock()
+        self._path = Path(media).resolve()
+        self._revision = 0
+        self._image_transform = image_transform
+        self._stop_event = stop_event
+        self.changed = threading.Event()
+
+    def switch(self, media: str | Path) -> None:
+        path = Path(media).resolve()
+        with self._lock:
+            self._path = path
+            self._revision += 1
+            self.changed.set()
+
+    def __iter__(self):
+        while True:
+            with self._lock:
+                path = self._path
+                revision = self._revision
+                self.changed.clear()
+            frames = iter_media_frames(
+                path,
+                loop=True,
+                image_transform=self._image_transform,
+            )
+            iterator = iter(frames)
+            while True:
+                if self._stop_event is not None and self._stop_event.is_set():
+                    return
+                with self._lock:
+                    if revision != self._revision:
+                        break
+                try:
+                    frame = next(iterator)
+                except StopIteration:
+                    break
+                yield frame
+
+
 class PlaybackController:
     def __init__(self, overlay: OverlayRenderer | None = None) -> None:
         self._lock = threading.Lock()
         self._stop_event: threading.Event | None = None
         self._thread: threading.Thread | None = None
+        self._frame_source: SwitchableMediaFrames | None = None
         self._preview_jpeg: bytes | None = None
         self.overlay = overlay or OverlayRenderer()
         self._status: dict[str, Any] = {
@@ -118,6 +204,7 @@ class PlaybackController:
             "media_name": None,
             "media_info": None,
             "library_id": None,
+            "selection_revision": 0,
             "bytes_streamed": 0,
             "error": None,
         }
@@ -132,27 +219,35 @@ class PlaybackController:
         *,
         display_name: str | None = None,
         library_id: str | None = None,
+        media_info: MediaInfo | None = None,
+        preview_jpeg: bytes | None = None,
     ) -> MediaInfo:
         path = Path(media).expanduser().resolve()
         if not path.is_file():
             raise ValueError(f"找不到媒体文件：{path}")
-        info = inspect_media(path)
-        preview_jpeg = render_preview_jpeg(path)
+        info = media_info or inspect_media(path)
+        prepared_preview = (
+            preview_jpeg if preview_jpeg is not None else render_preview_jpeg(path)
+        )
 
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 raise RuntimeError("屏幕正在播放，请先停止当前任务")
+            selection_revision = int(
+                self._status.get("selection_revision", 0)
+            ) + 1
             self._status.update(
                 {
                     "media": str(path),
                     "media_name": display_name or path.name,
                     "media_info": asdict(info),
                     "library_id": library_id,
+                    "selection_revision": selection_revision,
                     "bytes_streamed": 0,
                     "error": None,
                 }
             )
-            self._preview_jpeg = preview_jpeg
+            self._preview_jpeg = prepared_preview
         return info
 
     def selected_media(self) -> Path | None:
@@ -169,8 +264,6 @@ class PlaybackController:
 
     def start(self, media: str) -> None:
         path = Path(media).expanduser().resolve()
-        info = inspect_media(path)
-        preview_jpeg = render_preview_jpeg(path)
 
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
@@ -178,8 +271,33 @@ class PlaybackController:
             previous_media = self._status.get("media")
             previous_name = self._status.get("media_name")
             previous_library_id = self._status.get("library_id")
+            selection_revision = int(
+                self._status.get("selection_revision", 0)
+            )
+            previous_info = self._status.get("media_info")
+            if previous_media == str(path) and isinstance(previous_info, dict):
+                info = MediaInfo(**previous_info)
+                preview_jpeg = self._preview_jpeg
+            else:
+                info = None
+                preview_jpeg = None
+
+        if info is None:
+            info = inspect_media(path)
+        if preview_jpeg is None:
+            preview_jpeg = render_preview_jpeg(path)
+
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                raise RuntimeError("屏幕正在播放，请先停止当前任务")
             stop_event = threading.Event()
+            frame_source = SwitchableMediaFrames(
+                path,
+                self.overlay.apply,
+                stop_event,
+            )
             self._stop_event = stop_event
+            self._frame_source = frame_source
             self._status = {
                 "state": "starting",
                 "media": str(path),
@@ -192,13 +310,14 @@ class PlaybackController:
                 "library_id": (
                     previous_library_id if previous_media == str(path) else None
                 ),
+                "selection_revision": selection_revision,
                 "bytes_streamed": 0,
                 "error": None,
             }
             self._preview_jpeg = preview_jpeg
             self._thread = threading.Thread(
                 target=self._play_worker,
-                args=(path, stop_event),
+                args=(frame_source, stop_event),
                 name="b360gt-playback",
                 daemon=True,
             )
@@ -218,23 +337,54 @@ class PlaybackController:
         *,
         display_name: str | None = None,
         library_id: str | None = None,
+        media_info: MediaInfo | None = None,
+        preview_jpeg: bytes | None = None,
     ) -> tuple[MediaInfo, bool]:
+        path = Path(media).expanduser().resolve()
+        if not path.is_file():
+            raise ValueError(f"找不到媒体文件：{path}")
+        info = media_info or inspect_media(path)
+        prepared_preview = (
+            preview_jpeg if preview_jpeg is not None else render_preview_jpeg(path)
+        )
         with self._lock:
-            resume = self._thread is not None and self._thread.is_alive()
-        if resume:
-            self.stop_and_wait()
+            active = self._thread is not None and self._thread.is_alive()
+            frame_source = self._frame_source
+            if active and frame_source is not None:
+                selection_revision = int(
+                    self._status.get("selection_revision", 0)
+                ) + 1
+                self._status.update(
+                    {
+                        "state": "starting",
+                        "media": str(path),
+                        "media_name": display_name or path.name,
+                        "media_info": asdict(info),
+                        "library_id": library_id,
+                        "selection_revision": selection_revision,
+                        "error": None,
+                    }
+                )
+                self._preview_jpeg = prepared_preview
+            else:
+                frame_source = None
+
+        if frame_source is not None:
+            frame_source.switch(path)
+            return info, True
+
         info = self.select_media(
-            media,
+            path,
             display_name=display_name,
             library_id=library_id,
+            media_info=info,
+            preview_jpeg=prepared_preview,
         )
-        if resume:
-            self.start(str(Path(media).expanduser().resolve()))
-        return info, resume
+        return info, False
 
     def _play_worker(
         self,
-        path: Path,
+        frame_source: SwitchableMediaFrames,
         stop_event: threading.Event,
     ) -> None:
         def update_progress(written: int) -> None:
@@ -244,11 +394,10 @@ class PlaybackController:
 
         try:
             written = stream_frames(
-                iter_media_frames(
-                    path, loop=True, image_transform=self.overlay.apply
-                ),
+                frame_source,
                 repeat_rate=DISPLAY_KEEPALIVE_RATE,
                 stop_event=stop_event,
+                frame_change_event=frame_source.changed,
                 progress_callback=update_progress,
             )
         except Exception as exc:
@@ -263,12 +412,15 @@ class PlaybackController:
         finally:
             with self._lock:
                 self._stop_event = None
+                self._frame_source = None
 
     def stop(self) -> None:
         with self._lock:
             if self._stop_event is not None:
                 self._status["state"] = "stopping"
                 self._stop_event.set()
+                if self._frame_source is not None:
+                    self._frame_source.changed.set()
 
     def stop_and_wait(self) -> None:
         self.stop()
@@ -286,12 +438,16 @@ class PlaybackController:
             return
         self.stop_and_wait()
         with self._lock:
+            selection_revision = int(
+                self._status.get("selection_revision", 0)
+            ) + 1
             self._status = {
                 "state": "idle",
                 "media": None,
                 "media_name": None,
                 "media_info": None,
                 "library_id": None,
+                "selection_revision": selection_revision,
                 "bytes_streamed": 0,
                 "error": None,
             }
@@ -312,7 +468,16 @@ class UiServer(ThreadingHTTPServer):
         self._preview_condition = threading.Condition()
         self._preview_streams: set[threading.Event] = set()
         self.library = MediaLibrary()
-        self.overlay = OverlayRenderer()
+        saved_overlay = self.library.overlay_config()
+        try:
+            overlay_config = (
+                OverlayConfig.parse(saved_overlay)
+                if saved_overlay is not None
+                else OverlayConfig()
+            )
+        except (TypeError, ValueError):
+            overlay_config = OverlayConfig()
+        self.overlay = OverlayRenderer(overlay_config)
         self.playback = PlaybackController(self.overlay)
         selected = self.library.selected_item()
         if selected is not None:
@@ -320,7 +485,13 @@ class UiServer(ThreadingHTTPServer):
                 selected.path,
                 display_name=selected.name,
                 library_id=selected.item_id,
+                media_info=selected.media_info,
+                preview_jpeg=selected.preview_path.read_bytes(),
             )
+            if self.library.desired_running():
+                self.playback.start_selected()
+        elif self.library.desired_running():
+            self.library.remember_running(False)
 
     def register_preview_stream(self) -> threading.Event:
         event = threading.Event()
@@ -389,6 +560,7 @@ class UiHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/status":
             status = self.server.playback.status()
+            status["enabled"] = self.server.library.desired_running()
             status["channel_conflicts"] = channel_conflicts()
             self._json(HTTPStatus.OK, status)
             return
@@ -475,10 +647,24 @@ class UiHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/monitor/config":
                 config = self.server.overlay.configure(self._read_json())
+                self.server.library.remember_overlay_config(config)
                 self._json(HTTPStatus.OK, {"config": config})
+                return
+            if path == "/api/playback":
+                enabled = self._read_json().get("enabled")
+                if not isinstance(enabled, bool):
+                    raise ValueError("enabled 必须是布尔值")
+                if enabled:
+                    self.server.playback.start_selected()
+                    self.server.library.remember_running(True)
+                else:
+                    self.server.library.remember_running(False)
+                    self.server.playback.stop()
+                self._json(HTTPStatus.ACCEPTED, {"ok": True, "enabled": enabled})
                 return
             if path == "/api/play":
                 self.server.playback.start_selected()
+                self.server.library.remember_running(True)
                 self._json(HTTPStatus.ACCEPTED, {"ok": True})
                 return
             if path == "/api/library/select":
@@ -489,6 +675,8 @@ class UiHandler(BaseHTTPRequestHandler):
                     item.path,
                     display_name=item.name,
                     library_id=item.item_id,
+                    media_info=item.media_info,
+                    preview_jpeg=item.preview_path.read_bytes(),
                 )
                 self.server.library.remember_selected(item.item_id)
                 self._json(
@@ -506,6 +694,7 @@ class UiHandler(BaseHTTPRequestHandler):
                 item = self.server.library.get(str(request.get("id", "")))
                 if self.server.playback.selected_media() == item.path:
                     self.server.stop_preview_streams()
+                    self.server.library.remember_running(False)
                 self.server.playback.clear_if_selected(item.path)
                 deleted = self.server.library.delete(item.item_id)
                 self._json(
@@ -514,6 +703,7 @@ class UiHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/stop":
+                self.server.library.remember_running(False)
                 self.server.playback.stop()
                 self._json(HTTPStatus.ACCEPTED, {"ok": True})
                 return
@@ -566,6 +756,8 @@ class UiHandler(BaseHTTPRequestHandler):
             item.path,
             display_name=item.name,
             library_id=item.item_id,
+            media_info=item.media_info,
+            preview_jpeg=item.preview_path.read_bytes(),
         )
         self.server.library.remember_selected(item.item_id)
 
@@ -711,6 +903,8 @@ def run_ui(
     port: int = 8765,
     open_browser: bool = True,
     quiet: bool = False,
+    shutdown_event: threading.Event | None = None,
+    managed_background: bool = False,
 ) -> None:
     try:
         server = UiServer(("127.0.0.1", port))
@@ -721,11 +915,41 @@ def run_ui(
             ) from exc
         raise
     url = f"http://127.0.0.1:{server.server_port}/"
+    if managed_background:
+        from .background import record_current_process, stop_path
+
+        record_current_process(server.server_port)
+
+        def request_shutdown(_signum: int, _frame: object) -> None:
+            threading.Thread(target=server.shutdown, daemon=True).start()
+
+        signal.signal(signal.SIGTERM, request_shutdown)
+
+        def watch_stop_request() -> None:
+            while not stop_path().exists():
+                time.sleep(0.2)
+            server.shutdown()
+
+        threading.Thread(
+            target=watch_stop_request,
+            name="b360gt-stop-watcher",
+            daemon=True,
+        ).start()
     if not quiet:
         print(f"B360GT 控制台：{url}")
         print("按 Ctrl+C 关闭控制台。")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    if shutdown_event is not None:
+        def watch_shutdown() -> None:
+            shutdown_event.wait()
+            server.shutdown()
+
+        threading.Thread(
+            target=watch_shutdown,
+            name="b360gt-shutdown-watcher",
+            daemon=True,
+        ).start()
     try:
         server.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:
@@ -734,3 +958,7 @@ def run_ui(
         server.stop_preview_streams()
         server.playback.close()
         server.server_close()
+        if managed_background:
+            from .background import clear_current_process
+
+            clear_current_process()

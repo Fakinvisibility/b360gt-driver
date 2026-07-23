@@ -15,6 +15,7 @@ import usb.util
 
 from .device_init import (
     HID_INTERFACE,
+    disable_display,
     enable_after_first_frame,
     find_hid_interface,
     heartbeat,
@@ -29,6 +30,7 @@ DISPLAY_INTERFACE = 3
 DISPLAY_ENDPOINT = 0x04
 USB_CHUNK_SIZE = 65536
 MAX_REPEAT_RATE = 30.0
+DISPLAY_PREROLL_FRAMES = 2
 
 
 class DeviceSafetyError(RuntimeError):
@@ -216,6 +218,7 @@ def stream_frames(
     repeat_rate: float = 2.0,
     timeout_ms: int = 5000,
     stop_event: Event | None = None,
+    frame_change_event: Event | None = None,
     progress_callback: Callable[[int], None] | None = None,
 ) -> int:
     """Initialize the display and play timed frames.
@@ -239,6 +242,7 @@ def stream_frames(
     control = open_feature_channel(device)
     claimed = False
     detached_kernel_driver = False
+    display_enabled = False
     try:
         initialize_display(control)
 
@@ -265,10 +269,17 @@ def stream_frames(
 
         usb.util.claim_interface(device, interface)
         claimed = True
-        total = _write_frame(device, first_frame, timeout_ms)
-        if progress_callback is not None:
-            progress_callback(total)
+        # The controller can expose its green initial framebuffer if display
+        # enable follows the first transfer immediately. Preloading the same
+        # complete target frame twice lets the controller latch stable content
+        # before the captured display-enable reports are sent.
+        total = 0
+        for _ in range(DISPLAY_PREROLL_FRAMES):
+            total += _write_frame(device, first_frame, timeout_ms)
+            if progress_callback is not None:
+                progress_callback(total)
         enable_after_first_frame(control)
+        display_enabled = True
 
         start = time.monotonic()
         deadline = None if duration_seconds is None else start + duration_seconds
@@ -281,11 +292,21 @@ def stream_frames(
             yield first_frame, first_duration
             yield from iterator
 
+        source_changed = False
         for frame, frame_duration in all_frames():
             if stop_event is not None and stop_event.is_set():
                 return total
+            if frame_change_event is not None and frame_change_event.is_set():
+                source_changed = True
+                continue
             if frame_duration <= 0:
                 raise ValueError("frame durations must be positive")
+            if source_changed:
+                # Frame decoding happens before the loop body. Reset the
+                # timeline after that work so the first frame from a newly
+                # selected source is always transmitted immediately.
+                timeline = time.monotonic()
+                source_changed = False
             timeline += frame_duration
             already_sent = first_already_sent
             first_already_sent = False
@@ -316,10 +337,17 @@ def stream_frames(
                     wake_at = min(wake_at, deadline)
                 delay = wake_at - time.monotonic()
                 if delay > 0:
-                    time.sleep(delay)
+                    if frame_change_event is not None:
+                        if frame_change_event.wait(delay):
+                            source_changed = True
+                            break
+                    else:
+                        time.sleep(delay)
                 already_sent = False
         return total
     finally:
+        if display_enabled:
+            disable_display(control)
         if claimed:
             usb.util.release_interface(device, interface)
         if detached_kernel_driver:

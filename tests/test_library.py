@@ -10,6 +10,38 @@ from b360gt.library import MediaLibrary
 
 
 class MediaLibraryTests(unittest.TestCase):
+    def test_runtime_and_overlay_state_survive_selection_updates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "library"
+            source = Path(directory) / "image.png"
+            Image.new("RGB", (32, 32), "blue").save(source)
+            library = MediaLibrary(root)
+            item = library.add(source, display_name="image.png")
+
+            library.remember_running(True)
+            library.remember_overlay_config(
+                {
+                    "enabled": False,
+                    "gpu_enabled": False,
+                    "position": "bottom-right",
+                    "refresh_seconds": 2.0,
+                }
+            )
+            library.remember_selected(item.item_id)
+
+            reopened = MediaLibrary(root)
+            self.assertTrue(reopened.desired_running())
+            self.assertEqual(reopened.selected_id(), item.item_id)
+            self.assertEqual(
+                reopened.overlay_config(),
+                {
+                    "enabled": False,
+                    "gpu_enabled": False,
+                    "position": "bottom-right",
+                    "refresh_seconds": 2.0,
+                },
+            )
+
     def test_media_survives_library_reopen_and_can_be_deleted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "library"

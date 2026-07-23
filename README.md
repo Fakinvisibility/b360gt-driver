@@ -64,6 +64,23 @@ Windows 日常使用可启动无终端窗口、不会自动打开浏览器的后
 .\.venv\Scripts\b360gt-background.exe
 ```
 
+For everyday use, activate the virtual environment once and use the short
+service commands:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+b360gt start
+b360gt status
+b360gt stop
+```
+
+`b360gt stop` shuts down gracefully, including playback and USB cleanup.
+
+The Windows portable release also includes `添加到命令行PATH.cmd` and
+`从命令行PATH移除.cmd`. Adding the portable directory to the current user's
+PATH is optional and does not require administrator privileges. Open a new
+PowerShell window after adding or removing it.
+
 启动后可关闭 PowerShell，随后手动访问
 [`http://127.0.0.1:8765/`](http://127.0.0.1:8765/)。后台错误日志保存在
 `%LOCALAPPDATA%\b360gt\logs\background.log`。安装新版本后需要重新执行

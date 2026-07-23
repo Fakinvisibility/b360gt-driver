@@ -4,8 +4,7 @@ const fileInput = $("#fileInput");
 const dropZone = $("#dropZone");
 const imagePreview = $("#imagePreview");
 const emptyPreview = $("#emptyPreview");
-const startButton = $("#startButton");
-const stopButton = $("#stopButton");
+const playbackEnabled = $("#playbackEnabled");
 const probeButton = $("#probeButton");
 const libraryList = $("#libraryList");
 const libraryCount = $("#libraryCount");
@@ -19,6 +18,14 @@ let lastStatus = { state: "idle" };
 let previewRevision = 0;
 let monitorConfigLoaded = false;
 let currentMonitorConfig = null;
+let playbackUpdatePending = false;
+let mediaSelectionRevision = 0;
+let mediaSelectionPending = false;
+let mediaSelectionTimer = null;
+let mediaSelectionInFlight = false;
+let pendingMediaSelection = null;
+let latestSelectionRevision = 0;
+const MEDIA_SELECTION_DEBOUNCE_MS = 140;
 
 function setMessage(text, type = "") {
   const node = $("#message");
@@ -87,10 +94,18 @@ function showSelectedPreview(info) {
   };
   imagePreview.src = info.kind === "video"
     ? `/api/preview-stream?v=${revision}-${Date.now()}`
-    : `/api/media?v=${revision}-${Date.now()}`;
+    : info.kind === "image"
+      ? `/api/preview?v=${revision}-${Date.now()}`
+      : `/api/media?v=${revision}-${Date.now()}`;
 }
 
 function applySelectedStatus(status) {
+  if (Number.isFinite(status.selection_revision)) {
+    latestSelectionRevision = Math.max(
+      latestSelectionRevision,
+      status.selection_revision,
+    );
+  }
   lastStatus = status;
   restoredMedia = status.media || "";
   selectedLibraryId = status.library_id || "";
@@ -173,24 +188,71 @@ async function refreshLibrary() {
   renderLibrary();
 }
 
-async function selectLibraryItem(item) {
+function selectLibraryItem(item) {
   if (item.id === selectedLibraryId) return;
+  const revision = ++mediaSelectionRevision;
+  mediaSelectionPending = true;
+  selectedLibraryId = item.id;
+  $("#mediaName").textContent = item.name;
+  applyMediaInfo(item.media_info);
+  const previewRevisionForSelection = ++previewRevision;
+  emptyPreview.style.display = "none";
+  imagePreview.style.display = "block";
+  imagePreview.onerror = () => {
+    if (previewRevisionForSelection !== previewRevision) return;
+    showEmptyPreview("预览加载失败");
+  };
+  imagePreview.src =
+    `/api/library/thumbnail?id=${encodeURIComponent(item.id)}` +
+    `&v=${previewRevisionForSelection}`;
+  renderLibrary();
+  setMessage(`正在切换到 ${item.name}…`);
+
+  pendingMediaSelection = { item, revision };
+  if (mediaSelectionTimer !== null) {
+    window.clearTimeout(mediaSelectionTimer);
+  }
+  mediaSelectionTimer = window.setTimeout(
+    commitLatestMediaSelection,
+    MEDIA_SELECTION_DEBOUNCE_MS,
+  );
+}
+
+async function commitLatestMediaSelection() {
+  mediaSelectionTimer = null;
+  if (mediaSelectionInFlight || pendingMediaSelection === null) return;
+
+  const { item, revision } = pendingMediaSelection;
+  pendingMediaSelection = null;
+  mediaSelectionInFlight = true;
   try {
-    setMessage(`正在切换到 ${item.name}…`);
     const result = await api("/api/library/select", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id: item.id }),
     });
-    selectedLibraryId = item.id;
+    if (revision !== mediaSelectionRevision) return;
     applySelectedStatus(result.media);
     renderLibrary();
     setMessage(
-      result.resumed ? "已切换媒体，正在重新初始化屏幕…" : "媒体切换中",
+      result.resumed ? "已切换媒体，正在更新水冷屏…" : "媒体切换中",
       "success",
     );
   } catch (error) {
+    if (revision !== mediaSelectionRevision) return;
+    const status = await api("/api/status").catch(() => null);
+    if (status) applySelectedStatus(status);
     setMessage(error.message, "error");
+  } finally {
+    mediaSelectionInFlight = false;
+    if (pendingMediaSelection !== null) {
+      if (mediaSelectionTimer !== null) {
+        window.clearTimeout(mediaSelectionTimer);
+      }
+      mediaSelectionTimer = window.setTimeout(commitLatestMediaSelection, 0);
+    } else if (revision === mediaSelectionRevision) {
+      mediaSelectionPending = false;
+    }
   }
 }
 
@@ -372,28 +434,25 @@ async function saveMonitorConfig() {
 ["#overlayEnabled", "#gpuMonitoringEnabled", "#overlayPosition", "#overlayRefresh"]
   .forEach((selector) => $(selector).addEventListener("change", saveMonitorConfig));
 
-startButton.addEventListener("click", async () => {
+playbackEnabled.addEventListener("change", async () => {
+  const enabled = playbackEnabled.checked;
+  playbackUpdatePending = true;
   try {
-    startButton.disabled = true;
+    playbackEnabled.disabled = true;
     if (uploadPromise) await uploadPromise;
-    if (!selectedLibraryId) throw new Error("请先从媒体库选择或上传文件");
-    await api("/api/play", {
+    if (enabled && !selectedLibraryId) throw new Error("请先从媒体库选择或上传文件");
+    await api("/api/playback", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
     });
-    setMessage("屏幕正在初始化，请稍候…", "success");
+    setMessage(enabled ? "屏幕正在初始化，请稍候…" : "正在安全停止显示…", enabled ? "success" : "");
   } catch (error) {
-    startButton.disabled = false;
+    playbackEnabled.checked = !enabled;
     setMessage(error.message, "error");
-  }
-});
-
-stopButton.addEventListener("click", async () => {
-  try {
-    stopButton.disabled = true;
-    await api("/api/stop", { method: "POST" });
-    setMessage("正在安全停止播放…");
-  } catch (error) {
-    setMessage(error.message, "error");
+  } finally {
+    playbackUpdatePending = false;
+    playbackEnabled.disabled = false;
   }
 });
 
@@ -435,6 +494,11 @@ probeButton.addEventListener("click", async () => {
 });
 
 function restorePreview(status) {
+  if (mediaSelectionPending) return;
+  if (
+    Number.isFinite(status.selection_revision) &&
+    status.selection_revision < latestSelectionRevision
+  ) return;
   if (!status.media) {
     if (restoredMedia) applySelectedStatus(status);
     return;
@@ -454,10 +518,10 @@ async function pollStatus() {
       : "显示通道为独占资源，请勿同时运行 Myth.Cool 或多个 B360GT 后端";
     channelWarning.classList.toggle("active", conflicts.length > 0);
     restorePreview(status);
-    const active = ["starting", "playing", "stopping"].includes(status.state);
     $("#playbackState").textContent = stateLabel(status.state);
-    startButton.disabled = active;
-    stopButton.disabled = !active || status.state === "stopping";
+    if (!playbackUpdatePending) {
+      playbackEnabled.checked = Boolean(status.enabled);
+    }
     if (status.error) setMessage(status.error, "error");
     if (status.state === "playing") {
       setMessage("正在向水冷屏持续发送画面", "success");

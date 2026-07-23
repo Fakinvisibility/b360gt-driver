@@ -25,6 +25,20 @@
 
     <section class="workspace">
       <aside class="control-panel">
+        <section class="playback-section">
+          <label class="playback-toggle">
+            <strong>屏幕显示</strong>
+            <span class="switch playback-switch">
+              <input id="playbackEnabled" type="checkbox" role="switch"
+                     aria-label="开启或关闭屏幕显示">
+              <span></span>
+            </span>
+          </label>
+          <p id="channelWarning" class="channel-warning">
+            显示通道为独占资源，请勿同时运行 Myth.Cool 或多个 B360GT 后端
+          </p>
+        </section>
+
         <label id="dropZone" class="drop-zone">
           <input id="fileInput" type="file" accept="image/*,video/*">
           <div class="upload-icon">↥</div>
@@ -32,21 +46,15 @@
           <span>或点击选择本地文件</span>
         </label>
 
-        <div class="library-heading">
-          <strong>已保存媒体</strong>
-          <span id="libraryCount">0 项</span>
-        </div>
-        <div id="libraryList" class="library-list">
-          <div class="library-empty">媒体库为空，上传后会永久保存在这里</div>
-        </div>
-
-        <div class="actions">
-          <button id="startButton" class="primary-button">开始播放</button>
-          <button id="stopButton" class="stop-button" disabled>停止</button>
-        </div>
-        <p id="channelWarning" class="channel-warning">
-          显示通道为独占资源，请勿同时运行 Myth.Cool 或多个 B360GT 后端
-        </p>
+        <section class="library-section">
+          <div class="library-heading">
+            <strong>已保存媒体</strong>
+            <span id="libraryCount">0 项</span>
+          </div>
+          <div id="libraryList" class="library-list">
+            <div class="library-empty">媒体库为空，上传后会永久保存在这里</div>
+          </div>
+        </section>
 
         <section class="monitor-controls">
           <div class="monitor-title">
@@ -81,6 +89,7 @@
           </label>
           <p id="monitorHint">仅采集操作系统及显卡厂商只读接口数据</p>
         </section>
+
       </aside>
 
       <section class="stage">

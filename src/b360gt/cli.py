@@ -70,6 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="start the control panel without opening a browser",
     )
+    subparsers.add_parser("start", help="start the silent background service")
+    subparsers.add_parser("stop", help="stop the background service")
+    subparsers.add_parser("status", help="show the background service status")
     return parser
 
 
@@ -142,6 +145,21 @@ def main() -> int:
 
         run_ui(port=args.port, open_browser=not args.no_browser)
         return 0
+
+    if args.command == "start":
+        from .windows_background import start_main
+
+        return start_main()
+
+    if args.command == "stop":
+        from .windows_background import stop_main
+
+        return stop_main()
+
+    if args.command == "status":
+        from .windows_background import status_main
+
+        return status_main()
 
     raise AssertionError(f"Unhandled command: {args.command}")
 
