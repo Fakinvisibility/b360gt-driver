@@ -27,7 +27,7 @@
 
 ## Windows 验证命令
 
-运行到按 `Ctrl+C`：
+以下命令会持续运行并显示图片；需要停止时，请在终端按 `Ctrl+C`：
 
 ```powershell
 .\.venv\Scripts\python.exe -m b360gt send .\test-images\orientation-pattern.png
