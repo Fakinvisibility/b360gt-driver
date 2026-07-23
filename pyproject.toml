@@ -13,7 +13,8 @@ dependencies = [
     "numpy>=1.24",
     "Pillow>=10",
     "pyusb>=1.2",
-    "av>=18",
+    "av>=17,<18; python_version < '3.11'",
+    "av>=18; python_version >= '3.11'",
     "hidapi>=0.14",
     "psutil>=5.9",
 ]
