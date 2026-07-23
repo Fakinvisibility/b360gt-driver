@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>B360GT Display Studio</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark"><span></span></div>
+        <div>
+          <h1>B360GT Display Studio</h1>
+          <p>Windows + Linux USB Display Controller</p>
+        </div>
+      </div>
+      <button id="probeButton" class="ghost-button"
+              title="点击重新检测" aria-label="点击重新检测水冷屏">
+        <span id="deviceDot" class="status-dot"></span>
+        <span id="deviceText">检测设备</span>
+      </button>
+    </header>
+
+    <section class="workspace">
+      <aside class="control-panel">
+        <label id="dropZone" class="drop-zone">
+          <input id="fileInput" type="file" accept="image/*,video/*">
+          <div class="upload-icon">↥</div>
+          <strong>拖入媒体文件</strong>
+          <span>或点击选择本地文件</span>
+        </label>
+
+        <div class="library-heading">
+          <strong>已保存媒体</strong>
+          <span id="libraryCount">0 项</span>
+        </div>
+        <div id="libraryList" class="library-list">
+          <div class="library-empty">媒体库为空，上传后会永久保存在这里</div>
+        </div>
+
+        <div class="actions">
+          <button id="startButton" class="primary-button">开始播放</button>
+          <button id="stopButton" class="stop-button" disabled>停止</button>
+        </div>
+        <p id="channelWarning" class="channel-warning">
+          显示通道为独占资源，请勿同时运行 Myth.Cool 或多个 B360GT 后端
+        </p>
+
+        <section class="monitor-controls">
+          <div class="monitor-title">
+            <strong>系统监控叠加层</strong>
+            <label class="switch">
+              <input id="overlayEnabled" type="checkbox">
+              <span></span>
+            </label>
+          </div>
+          <div class="monitor-grid">
+            <label>位置
+              <select id="overlayPosition">
+                <option value="top-left">左上</option>
+                <option value="top-right">右上</option>
+                <option value="bottom-left">左下</option>
+                <option value="bottom-right">右下</option>
+              </select>
+            </label>
+            <label>刷新
+              <select id="overlayRefresh">
+                <option value="0.5">0.5 秒</option>
+                <option value="1">1 秒</option>
+                <option value="2">2 秒</option>
+                <option value="5">5 秒</option>
+              </select>
+            </label>
+          </div>
+          <label class="gpu-monitor-option"
+                 title="最多每 5 秒查询一次">
+            <input id="gpuMonitoringEnabled" type="checkbox" checked>
+            <span>采集 GPU 数据（可能唤醒独显）</span>
+          </label>
+          <p id="monitorHint">仅采集操作系统及显卡厂商只读接口数据</p>
+        </section>
+      </aside>
+
+      <section class="stage">
+        <div class="stage-meta">
+          <div>
+            <span class="eyebrow">DISPLAY PREVIEW</span>
+            <h2 id="mediaName">尚未选择媒体</h2>
+          </div>
+          <span id="resolution" class="resolution hidden">480 × 480 输出</span>
+        </div>
+
+        <div class="preview-wrap">
+          <div class="ambient"></div>
+          <div class="screen-frame">
+            <div id="emptyPreview" class="empty-preview">
+              <span>请上传媒体文件</span>
+            </div>
+            <img id="imagePreview" alt="图片预览">
+            <div id="screenOverlay" class="screen-overlay" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <div class="telemetry">
+          <div>
+            <span>水冷屏状态</span>
+            <strong id="playbackState">未显示内容</strong>
+          </div>
+          <div>
+            <span>媒体属性</span>
+            <strong id="mediaType">—</strong>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <footer>
+      <span id="message">控制台已就绪</span>
+      <span>LOCAL ONLY · 127.0.0.1</span>
+    </footer>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "b360gt"
+version = "1.0.0rc1"
+description = "Experimental Linux userspace driver for the Valkyrie B360GT USB display"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "Pillow>=10",
+    "pyusb>=1.2",
+    "av>=18",
+    "hidapi>=0.14",
+    "psutil>=5.9",
+]
+
+[project.scripts]
+b360gt = "b360gt.cli:main"
+b360gt-ui = "b360gt.web_ui:run_ui"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+b360gt = ["web/*.html", "web/*.css", "web/*.js"]

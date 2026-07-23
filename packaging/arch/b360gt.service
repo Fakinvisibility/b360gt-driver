@@ -1,0 +1,12 @@
+[Unit]
+Description=Valkyrie B360GT USB display player
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/b360gt play %h/.config/b360gt/media
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+
+# Local application state
+b360gt-uploads/
+media-library/
+*.log
+
+# Reverse-engineering and machine-local material
+captures/
+artifacts/
+backups/
+third_party/
+UsbTreeView_x64/
+usb_full_report.txt
+*.pcap
+*.pcapng
+*.bulk.bin
+*.frame
+*.iso
+*.tar.gz
+LibreHardwareMonitorLog-*.csv
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini

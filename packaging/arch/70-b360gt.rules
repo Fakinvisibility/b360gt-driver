@@ -1,0 +1,6 @@
+# Valkyrie B360GT USB display (MacroSilicon USB Display)
+# Bulk frame transport through /dev/bus/usb:
+ACTION!="remove", SUBSYSTEM=="usb", ATTR{idVendor}=="345f", ATTR{idProduct}=="9132", MODE="0660", TAG+="uaccess"
+
+# HID feature reports through /dev/hidraw:
+ACTION!="remove", SUBSYSTEM=="hidraw", KERNEL=="hidraw*", ATTRS{idVendor}=="345f", ATTRS{idProduct}=="9132", MODE="0660", TAG+="uaccess"

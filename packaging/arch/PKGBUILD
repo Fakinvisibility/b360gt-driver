@@ -1,0 +1,47 @@
+pkgname=b360gt
+pkgver=1.0.0rc1
+pkgrel=1
+pkgdesc="Userspace image and video driver for the Valkyrie B360GT USB display"
+arch=('x86_64')
+url="https://github.com/Fakinvisibility/b360gt-driver"
+license=('MIT')
+depends=(
+  'libusb'
+  'python'
+  'python-av'
+  'python-hidapi'
+  'python-numpy'
+  'python-pillow'
+  'python-psutil'
+  'python-pyusb'
+)
+makedepends=(
+  'python-build'
+  'python-installer'
+  'python-setuptools'
+  'python-wheel'
+)
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  PYTHONPATH=src python -m unittest discover -s tests -v
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+
+  install -Dm644 packaging/arch/70-b360gt.rules \
+    "$pkgdir/usr/lib/udev/rules.d/70-b360gt.rules"
+  install -Dm644 packaging/arch/b360gt.service \
+    "$pkgdir/usr/lib/systemd/user/b360gt.service"
+  install -Dm644 LICENSE \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
