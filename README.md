@@ -58,6 +58,17 @@
 .\.venv\Scripts\python.exe -m b360gt ui
 ```
 
+Windows 日常使用可启动无终端窗口、不会自动打开浏览器的后台入口：
+
+```powershell
+.\.venv\Scripts\b360gt-background.exe
+```
+
+启动后可关闭 PowerShell，随后手动访问
+[`http://127.0.0.1:8765/`](http://127.0.0.1:8765/)。后台错误日志保存在
+`%LOCALAPPDATA%\b360gt\logs\background.log`。安装新版本后需要重新执行
+`python -m pip install -e .`，以更新后台入口。
+
 控制台只监听 `127.0.0.1`，支持永久媒体库、拖放上传与安全删除，可在播放中
 直接切换图片、GIF、MP4/WebM。视频预览由后端解码为动态画面，不依赖浏览器
 是否支持源视频编码。

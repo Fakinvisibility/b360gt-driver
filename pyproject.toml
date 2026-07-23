@@ -23,6 +23,9 @@ dependencies = [
 b360gt = "b360gt.cli:main"
 b360gt-ui = "b360gt.web_ui:run_ui"
 
+[project.gui-scripts]
+b360gt-background = "b360gt.windows_background:main"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

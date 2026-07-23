@@ -706,7 +706,12 @@ class UiHandler(BaseHTTPRequestHandler):
                 remaining -= len(chunk)
 
 
-def run_ui(*, port: int = 8765, open_browser: bool = True) -> None:
+def run_ui(
+    *,
+    port: int = 8765,
+    open_browser: bool = True,
+    quiet: bool = False,
+) -> None:
     try:
         server = UiServer(("127.0.0.1", port))
     except OSError as exc:
@@ -716,8 +721,9 @@ def run_ui(*, port: int = 8765, open_browser: bool = True) -> None:
             ) from exc
         raise
     url = f"http://127.0.0.1:{server.server_port}/"
-    print(f"B360GT 控制台：{url}")
-    print("按 Ctrl+C 关闭控制台。")
+    if not quiet:
+        print(f"B360GT 控制台：{url}")
+        print("按 Ctrl+C 关闭控制台。")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:
