@@ -104,6 +104,11 @@ class MonitorTests(unittest.TestCase):
         with (
             patch("b360gt.monitor.sys.platform", "win32"),
             patch(
+                "b360gt.monitor.subprocess.CREATE_NO_WINDOW",
+                0x08000000,
+                create=True,
+            ),
+            patch(
                 "b360gt.monitor.subprocess.run",
                 return_value=completed,
             ) as run,
@@ -112,5 +117,5 @@ class MonitorTests(unittest.TestCase):
 
         self.assertEqual(
             run.call_args.kwargs["creationflags"],
-            __import__("subprocess").CREATE_NO_WINDOW,
+            0x08000000,
         )

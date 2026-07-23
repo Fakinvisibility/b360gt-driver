@@ -31,6 +31,9 @@ class FakeDisplay:
     def get_active_configuration(self):
         return object()
 
+    def is_kernel_driver_active(self, _interface: int) -> bool:
+        return False
+
 
 class DeviceSafetyTests(unittest.TestCase):
     def test_one_matching_unit_is_selected_without_serial_or_address(self) -> None:
@@ -92,6 +95,7 @@ class DeviceSafetyTests(unittest.TestCase):
         channel = FakeFeatureChannel()
         interface = object()
         with (
+            patch("b360gt.usb_transport.os.name", "posix"),
             patch("b360gt.usb_transport.find_display", return_value=FakeDisplay()),
             patch("b360gt.usb_transport.validate_display_interface"),
             patch("b360gt.usb_transport.open_feature_channel", return_value=channel),

@@ -9,7 +9,7 @@ import shutil
 import threading
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -92,7 +92,7 @@ class MediaLibrary:
         temporary_dir = self.root / f"{item_id}.part"
         item_dir = self.root / item_id
         media_path = temporary_dir / f"media{suffix}"
-        created_at = datetime.now(UTC).isoformat()
+        created_at = datetime.now(timezone.utc).isoformat()
         metadata = {
             "id": item_id,
             "name": Path(display_name).name or f"media{suffix}",
