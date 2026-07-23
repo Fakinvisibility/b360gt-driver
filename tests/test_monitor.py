@@ -12,6 +12,7 @@ from b360gt.monitor import (
     ReadOnlyMonitor,
     Telemetry,
     _linux_drm_metrics,
+    _nvidia_metrics,
     render_overlay,
 )
 
@@ -93,3 +94,19 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(query.call_count, 1)
         self.assertEqual(disabled, (None, None, None))
+
+    def test_nvidia_query_has_no_console_window_on_windows(self) -> None:
+        with (
+            patch("b360gt.monitor.sys.platform", "win32"),
+            patch(
+                "b360gt.monitor.subprocess.CREATE_NO_WINDOW",
+                0x08000000,
+                create=True,
+            ),
+            patch("b360gt.monitor.subprocess.run") as run,
+        ):
+            run.return_value.stdout = "37, 46\n"
+            usage, temperature = _nvidia_metrics()
+
+        self.assertEqual((usage, temperature), (37, 46))
+        self.assertEqual(run.call_args.kwargs["creationflags"], 0x08000000)
