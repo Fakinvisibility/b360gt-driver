@@ -180,6 +180,7 @@ POST_FIRST_FRAME_REPORTS = (
 )
 
 HEARTBEAT_REPORT = bytes.fromhex("b500320000000000")
+DISPLAY_DISABLE_REPORT = bytes.fromhex("a605000000000000")
 
 SAFE_FEATURE_REPORTS = frozenset(
     bytes.fromhex(report_hex)
@@ -223,6 +224,11 @@ def enable_after_first_frame(channel: FeatureChannel) -> None:
     for report_hex in POST_FIRST_FRAME_REPORTS:
         issue_report(channel, bytes.fromhex(report_hex))
         time.sleep(0.003)
+
+
+def disable_display(channel: FeatureChannel) -> None:
+    """Disable host-frame display using the captured counterpart to A6 05 01."""
+    issue_report(channel, DISPLAY_DISABLE_REPORT)
 
 
 def heartbeat(channel: FeatureChannel) -> None:

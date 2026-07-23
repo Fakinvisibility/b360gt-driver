@@ -22,6 +22,7 @@ dependencies = [
 [project.scripts]
 b360gt = "b360gt.cli:main"
 b360gt-ui = "b360gt.web_ui:run_ui"
+b360gt-background-stop = "b360gt.windows_background:stop_main"
 
 [project.gui-scripts]
 b360gt-background = "b360gt.windows_background:main"

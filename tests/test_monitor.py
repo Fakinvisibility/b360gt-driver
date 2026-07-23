@@ -95,18 +95,22 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(query.call_count, 1)
         self.assertEqual(disabled, (None, None, None))
 
-    def test_nvidia_query_has_no_console_window_on_windows(self) -> None:
+    def test_nvidia_query_never_opens_a_windows_console(self) -> None:
+        completed = type(
+            "Completed",
+            (),
+            {"stdout": "12, 44\n"},
+        )()
         with (
             patch("b360gt.monitor.sys.platform", "win32"),
             patch(
-                "b360gt.monitor.subprocess.CREATE_NO_WINDOW",
-                0x08000000,
-                create=True,
-            ),
-            patch("b360gt.monitor.subprocess.run") as run,
+                "b360gt.monitor.subprocess.run",
+                return_value=completed,
+            ) as run,
         ):
-            run.return_value.stdout = "37, 46\n"
-            usage, temperature = _nvidia_metrics()
+            self.assertEqual(_nvidia_metrics(), (12.0, 44.0))
 
-        self.assertEqual((usage, temperature), (37, 46))
-        self.assertEqual(run.call_args.kwargs["creationflags"], 0x08000000)
+        self.assertEqual(
+            run.call_args.kwargs["creationflags"],
+            __import__("subprocess").CREATE_NO_WINDOW,
+        )

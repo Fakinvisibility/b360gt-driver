@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import unittest
+from threading import Event
 from unittest.mock import patch
 
-from b360gt.device_init import HEARTBEAT_REPORT, issue_report
-from b360gt.usb_transport import DeviceSafetyError, find_display
+from b360gt.device_init import (
+    DISPLAY_DISABLE_REPORT,
+    HEARTBEAT_REPORT,
+    disable_display,
+    issue_report,
+)
+from b360gt.usb_transport import DeviceSafetyError, find_display, stream_frames
 
 
 class FakeFeatureChannel:
@@ -19,6 +25,11 @@ class FakeFeatureChannel:
 
     def close(self) -> None:
         pass
+
+
+class FakeDisplay:
+    def get_active_configuration(self):
+        return object()
 
 
 class DeviceSafetyTests(unittest.TestCase):
@@ -56,6 +67,67 @@ class DeviceSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             issue_report(channel, bytes.fromhex("0102030405060708"))
         self.assertEqual(channel.writes, [])
+
+    def test_display_disable_uses_captured_allowlisted_report(self) -> None:
+        channel = FakeFeatureChannel()
+
+        disable_display(channel)
+
+        self.assertEqual(channel.writes, [DISPLAY_DISABLE_REPORT])
+
+    def test_frame_source_switch_keeps_one_usb_session(self) -> None:
+        changed = Event()
+        sent: list[bytes] = []
+        first = b"first"
+        stale = b"stale"
+        latest = b"latest"
+
+        def frames():
+            yield first, 0.01
+            changed.set()
+            yield stale, 0.01
+            changed.clear()
+            yield latest, 0.01
+
+        channel = FakeFeatureChannel()
+        interface = object()
+        with (
+            patch("b360gt.usb_transport.find_display", return_value=FakeDisplay()),
+            patch("b360gt.usb_transport.validate_display_interface"),
+            patch("b360gt.usb_transport.open_feature_channel", return_value=channel),
+            patch("b360gt.usb_transport.initialize_display") as initialize,
+            patch(
+                "b360gt.usb_transport.enable_after_first_frame",
+                side_effect=lambda _control: sent.append(b"enabled"),
+            ),
+            patch(
+                "b360gt.usb_transport.disable_display",
+                side_effect=lambda _control: sent.append(b"disabled"),
+            ),
+            patch("b360gt.usb_transport.usb.util.find_descriptor", return_value=interface),
+            patch("b360gt.usb_transport.usb.util.claim_interface") as claim,
+            patch("b360gt.usb_transport.usb.util.release_interface"),
+            patch("b360gt.usb_transport.usb.util.dispose_resources"),
+            patch(
+                "b360gt.usb_transport._write_frame",
+                side_effect=lambda _device, frame, _timeout: (
+                    sent.append(frame) or len(frame)
+                ),
+            ),
+        ):
+            stream_frames(
+                frames(),
+                repeat_rate=2,
+                frame_change_event=changed,
+            )
+
+        self.assertEqual(initialize.call_count, 1)
+        self.assertEqual(claim.call_count, 1)
+        self.assertEqual(sent[:3], [first, first, b"enabled"])
+        self.assertIn(first, sent)
+        self.assertIn(latest, sent)
+        self.assertNotIn(stale, sent)
+        self.assertEqual(sent[-1], b"disabled")
 
 
 if __name__ == "__main__":

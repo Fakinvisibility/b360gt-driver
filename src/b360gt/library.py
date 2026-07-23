@@ -6,9 +6,10 @@ import json
 import os
 import re
 import shutil
+import threading
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,7 @@ class MediaLibrary:
     def __init__(self, root: str | Path | None = None) -> None:
         self.root = (Path(root) if root is not None else default_media_directory()).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self._state_lock = threading.RLock()
 
     def add(
         self,
@@ -90,7 +92,7 @@ class MediaLibrary:
         temporary_dir = self.root / f"{item_id}.part"
         item_dir = self.root / item_id
         media_path = temporary_dir / f"media{suffix}"
-        created_at = datetime.now(timezone.utc).isoformat()
+        created_at = datetime.now(UTC).isoformat()
         metadata = {
             "id": item_id,
             "name": Path(display_name).name or f"media{suffix}",
@@ -173,22 +175,47 @@ class MediaLibrary:
     def remember_selected(self, item_id: str | None) -> None:
         if item_id is not None:
             self.get(item_id)
-        state_path = self.root / STATE_NAME
-        temporary = self.root / f"{STATE_NAME}.part"
-        temporary.write_text(
-            json.dumps({"selected_id": item_id}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        temporary.replace(state_path)
+        self.update_state(selected_id=item_id)
+
+    def state(self) -> dict[str, Any]:
+        with self._state_lock:
+            state_path = self.root / STATE_NAME
+            if not state_path.is_file():
+                return {}
+            try:
+                value = json.loads(state_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {}
+            return value if isinstance(value, dict) else {}
+
+    def update_state(self, **changes: Any) -> dict[str, Any]:
+        with self._state_lock:
+            value = self.state()
+            value.update(changes)
+            state_path = self.root / STATE_NAME
+            temporary = self.root / f"{STATE_NAME}.part"
+            temporary.write_text(
+                json.dumps(value, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            temporary.replace(state_path)
+            return value
+
+    def desired_running(self) -> bool:
+        return self.state().get("running") is True
+
+    def remember_running(self, running: bool) -> None:
+        self.update_state(running=bool(running))
+
+    def overlay_config(self) -> dict[str, Any] | None:
+        value = self.state().get("overlay")
+        return value if isinstance(value, dict) else None
+
+    def remember_overlay_config(self, config: dict[str, Any]) -> None:
+        self.update_state(overlay=config)
 
     def selected_id(self) -> str | None:
-        state_path = self.root / STATE_NAME
-        if not state_path.is_file():
-            return None
-        try:
-            value = json.loads(state_path.read_text(encoding="utf-8")).get("selected_id")
-        except (OSError, json.JSONDecodeError):
-            return None
+        value = self.state().get("selected_id")
         return value if isinstance(value, str) and ITEM_ID_PATTERN.fullmatch(value) else None
 
     def selected_item(self) -> LibraryItem | None:
