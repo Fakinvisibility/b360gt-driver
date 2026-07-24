@@ -8,12 +8,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
+import usb.core
 
 from b360gt.media import inspect_media, render_preview_jpeg
 from b360gt.web_ui import (
+    CHANNEL_PERMISSION_MESSAGE,
     CHANNEL_BUSY_MESSAGE,
+    DEVICE_NOT_READY_MESSAGE,
     PlaybackController,
     SwitchableMediaFrames,
+    _is_retryable_display_error,
     _playback_error_message,
     channel_conflicts,
 )
@@ -165,11 +169,92 @@ class WebUiTests(unittest.TestCase):
                 self.assertEqual(controller.status()["library_id"], "b" * 32)
                 controller.close()
 
-    def test_permission_error_is_reported_as_channel_occupancy(self) -> None:
+    def test_permission_error_is_reported_as_device_permission_delay(self) -> None:
         self.assertEqual(
             _playback_error_message(PermissionError("access denied")),
+            CHANNEL_PERMISSION_MESSAGE,
+        )
+
+    def test_busy_error_is_reported_as_channel_occupancy(self) -> None:
+        self.assertEqual(
+            _playback_error_message(usb.core.USBError("resource busy")),
             CHANNEL_BUSY_MESSAGE,
         )
+
+    def test_missing_device_is_reported_as_not_ready(self) -> None:
+        error = RuntimeError("Expected one HID interface, found 0")
+        self.assertEqual(
+            _playback_error_message(error),
+            DEVICE_NOT_READY_MESSAGE,
+        )
+        self.assertTrue(_is_retryable_display_error(error))
+
+    def test_automatic_resume_retries_transient_usb_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preview.png"
+            Image.new("RGB", (32, 32), "green").save(path)
+            controller = PlaybackController()
+            controller.select_media(path, library_id="a" * 32)
+            attempts = 0
+
+            def transient_stream(
+                _frames,
+                *,
+                progress_callback,
+                **_kwargs,
+            ):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise PermissionError("udev ACL not ready")
+                progress_callback(123)
+                return 123
+
+            with (
+                patch(
+                    "b360gt.web_ui.stream_frames",
+                    side_effect=transient_stream,
+                ),
+                patch(
+                    "b360gt.web_ui.AUTO_RESUME_RETRY_INITIAL_SECONDS",
+                    0.01,
+                ),
+                self.assertLogs("b360gt.web_ui", level="WARNING"),
+            ):
+                controller.start_selected(retry_transient_errors=True)
+                thread = controller._thread
+                self.assertIsNotNone(thread)
+                thread.join(timeout=1)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(attempts, 2)
+            self.assertEqual(controller.status()["state"], "idle")
+            self.assertEqual(controller.status()["bytes_streamed"], 123)
+            self.assertIsNone(controller.status()["error"])
+
+    def test_manual_play_does_not_retry_transient_usb_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "preview.png"
+            Image.new("RGB", (32, 32), "green").save(path)
+            controller = PlaybackController()
+            controller.select_media(path, library_id="a" * 32)
+
+            with patch(
+                "b360gt.web_ui.stream_frames",
+                side_effect=PermissionError("access denied"),
+            ) as stream:
+                controller.start_selected()
+                thread = controller._thread
+                self.assertIsNotNone(thread)
+                thread.join(timeout=1)
+
+            self.assertFalse(thread.is_alive())
+            stream.assert_called_once()
+            self.assertEqual(controller.status()["state"], "error")
+            self.assertEqual(
+                controller.status()["error"],
+                CHANNEL_PERMISSION_MESSAGE,
+            )
 
     def test_page_omits_redundant_heading_and_external_path_controls(self) -> None:
         html = files("b360gt").joinpath("web", "index.html").read_text(encoding="utf-8")
