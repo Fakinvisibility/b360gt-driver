@@ -58,7 +58,31 @@ getfacl /dev/hidrawN
 Replace the placeholders with paths shown by `lsusb -d 345f:9132` and the HID
 enumeration output.
 
-## 4. Optional user service
+## 4. Background web control panel
+
+The installed package can run the local web UI through a systemd user service:
+
+```bash
+b360gt start
+b360gt status
+b360gt stop
+```
+
+The page remains available at `http://127.0.0.1:8765/` after the terminal
+closes. These commands start or stop the current session only. To start the UI
+automatically at login:
+
+```bash
+systemctl --user enable --now b360gt-ui.service
+```
+
+Inspect service logs with:
+
+```bash
+journalctl --user -u b360gt-ui.service
+```
+
+## 5. Optional automatic media player
 
 Choose the file to loop by creating a symlink:
 
@@ -77,7 +101,7 @@ journalctl --user -u b360gt.service
 
 The user service starts at login. It deliberately runs without root privileges.
 
-## 5. Persistent UI media library
+## 6. Persistent UI media library
 
 Start the local UI with:
 

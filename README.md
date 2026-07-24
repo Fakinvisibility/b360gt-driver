@@ -86,6 +86,17 @@ PowerShell window after adding or removing it.
 `%LOCALAPPDATA%\b360gt\logs\background.log`。安装新版本后需要重新执行
 `python -m pip install -e .`，以更新后台入口。
 
+Arch Linux 软件包也支持相同的日常后台控制命令：
+
+```bash
+b360gt start
+b360gt status
+b360gt stop
+```
+
+Linux 后台控制台由 `b360gt-ui.service` 这个 systemd 用户服务管理，不需要
+root 权限，也不会随 `b360gt start` 自动设置为登录时启动。
+
 控制台只监听 `127.0.0.1`，支持永久媒体库、拖放上传与安全删除，可在播放中
 直接切换图片、GIF、MP4/WebM。视频预览由后端解码为动态画面，不依赖浏览器
 是否支持源视频编码。
