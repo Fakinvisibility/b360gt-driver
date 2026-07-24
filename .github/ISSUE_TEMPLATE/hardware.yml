@@ -1,0 +1,49 @@
+name: 硬件兼容性报告
+description: 报告 B360GT 硬件批次或其他 Linux 发行版的测试结果
+title: "[Hardware]: "
+labels:
+  - hardware
+body:
+  - type: input
+    id: environment
+    attributes:
+      label: 操作系统与版本
+      placeholder: Ubuntu 26.04 / Arch Linux
+    validations:
+      required: true
+
+  - type: input
+    id: usb
+    attributes:
+      label: USB VID/PID
+      description: 不要填写设备序列号。
+      placeholder: 345f:9132
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: 测试结果
+      options:
+        - 全部正常
+        - 能识别但无法显示
+        - 无法识别
+        - 显示异常
+    validations:
+      required: true
+
+  - type: textarea
+    id: commands
+    attributes:
+      label: 已验证的命令和现象
+      description: 请说明 probe、静态图、GIF、视频和 Web UI 中实际测试的部分。
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关输出
+      description: 请移除序列号、用户名、Token 和无关硬件信息。
+      render: shell
