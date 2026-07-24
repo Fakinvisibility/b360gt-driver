@@ -915,26 +915,13 @@ def run_ui(
             ) from exc
         raise
     url = f"http://127.0.0.1:{server.server_port}/"
+    previous_sigterm_handler = None
     if managed_background:
-        from .background import record_current_process, stop_path
-
-        record_current_process(server.server_port)
-
         def request_shutdown(_signum: int, _frame: object) -> None:
             threading.Thread(target=server.shutdown, daemon=True).start()
 
+        previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
         signal.signal(signal.SIGTERM, request_shutdown)
-
-        def watch_stop_request() -> None:
-            while not stop_path().exists():
-                time.sleep(0.2)
-            server.shutdown()
-
-        threading.Thread(
-            target=watch_stop_request,
-            name="b360gt-stop-watcher",
-            daemon=True,
-        ).start()
     if not quiet:
         print(f"B360GT 控制台：{url}")
         print("按 Ctrl+C 关闭控制台。")
@@ -958,7 +945,5 @@ def run_ui(
         server.stop_preview_streams()
         server.playback.close()
         server.server_close()
-        if managed_background:
-            from .background import clear_current_process
-
-            clear_current_process()
+        if previous_sigterm_handler is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm_handler)

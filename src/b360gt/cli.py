@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
+import sys
 
 from .protocol import FRAME_SIZE, build_frame
 
@@ -69,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-browser",
         action="store_true",
         help="start the control panel without opening a browser",
+    )
+    ui.add_argument(
+        "--managed-background",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
     subparsers.add_parser("start", help="start the silent background service")
     subparsers.add_parser("stop", help="stop the background service")
@@ -143,21 +150,44 @@ def main() -> int:
     if args.command == "ui":
         from .web_ui import run_ui
 
-        run_ui(port=args.port, open_browser=not args.no_browser)
+        run_ui(
+            port=args.port,
+            open_browser=not args.no_browser,
+            quiet=args.managed_background,
+            managed_background=args.managed_background,
+        )
         return 0
 
     if args.command == "start":
-        from .windows_background import start_main
+        if os.name == "nt":
+            from .windows_background import start_main
+        elif sys.platform.startswith("linux"):
+            from .linux_background import start_main
+        else:
+            print("启动失败：当前平台不支持后台控制台")
+            return 1
 
         return start_main()
 
     if args.command == "stop":
-        from .windows_background import stop_main
+        if os.name == "nt":
+            from .windows_background import stop_main
+        elif sys.platform.startswith("linux"):
+            from .linux_background import stop_main
+        else:
+            print("停止失败：当前平台不支持后台控制台")
+            return 1
 
         return stop_main()
 
     if args.command == "status":
-        from .windows_background import status_main
+        if os.name == "nt":
+            from .windows_background import status_main
+        elif sys.platform.startswith("linux"):
+            from .linux_background import status_main
+        else:
+            print("B360GT 后台服务状态不受当前平台支持")
+            return 1
 
         return status_main()
 

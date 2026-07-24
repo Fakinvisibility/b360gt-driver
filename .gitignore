@@ -28,6 +28,7 @@ usb_full_report.txt
 *.frame
 *.iso
 *.tar.gz
+*.pkg.tar.zst
 LibreHardwareMonitorLog-*.csv
 
 # Editors and operating systems
