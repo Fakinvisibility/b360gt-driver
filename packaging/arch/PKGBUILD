@@ -1,5 +1,5 @@
 pkgname=b360gt
-pkgver=1.0.0rc2
+pkgver=1.0.0rc3
 pkgrel=1
 pkgdesc="Userspace image and video driver for the Valkyrie B360GT USB display"
 arch=('x86_64')
@@ -36,7 +36,8 @@ check() {
 
 package() {
   cd "$pkgname-$pkgver"
-  python -m installer --destdir="$pkgdir" dist/*.whl
+  python -m installer --destdir="$pkgdir" \
+    "dist/$pkgname-$pkgver-py3-none-any.whl"
 
   install -Dm644 packaging/arch/70-b360gt.rules \
     "$pkgdir/usr/lib/udev/rules.d/70-b360gt.rules"

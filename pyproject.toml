@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "b360gt"
-version = "1.0.0rc2"
+version = "1.0.0rc3"
 description = "Experimental Linux userspace driver for the Valkyrie B360GT USB display"
 readme = "README.md"
 license = "MIT"

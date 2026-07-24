@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -33,14 +34,21 @@ from .media import (
 )
 from .media_policy import MAX_VIDEO_SIZE
 from .monitor import OverlayConfig, OverlayRenderer
-from .usb_transport import probe, stream_frames
+from .usb_transport import DeviceSafetyError, probe, stream_frames
 
 MAX_UPLOAD_SIZE = MAX_VIDEO_SIZE
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 DISPLAY_KEEPALIVE_RATE = 2.0
+AUTO_RESUME_RETRY_INITIAL_SECONDS = 1.0
+AUTO_RESUME_RETRY_MAX_SECONDS = 30.0
 CHANNEL_BUSY_MESSAGE = (
     "显示通道已被其他程序占用；请关闭 Myth.Cool 或其他 B360GT 后端后重试"
 )
+CHANNEL_PERMISSION_MESSAGE = (
+    "暂时没有权限访问显示设备；系统可能仍在初始化设备权限"
+)
+DEVICE_NOT_READY_MESSAGE = "暂时找不到水冷屏；请检查 USB 连接"
+logger = logging.getLogger(__name__)
 CHANNEL_CONFLICT_REFRESH_SECONDS = 3.0
 _channel_conflict_lock = threading.Lock()
 _channel_conflict_cache: list[str] = []
@@ -117,21 +125,39 @@ def channel_conflicts() -> list[str]:
 
 def _playback_error_message(exc: Exception) -> str:
     text = str(exc).casefold()
-    if isinstance(exc, PermissionError) or (
-        isinstance(exc, usb.core.USBError)
-        and any(
-            token in text
-            for token in (
-                "busy",
-                "access",
-                "denied",
-                "claim_interface",
-                "resource",
-            )
-        )
+    if isinstance(exc, PermissionError) or any(
+        token in text for token in ("access", "denied", "permission")
+    ):
+        return CHANNEL_PERMISSION_MESSAGE
+    if any(token in text for token in ("not found", "found 0")):
+        return DEVICE_NOT_READY_MESSAGE
+    if isinstance(exc, usb.core.USBError) and any(
+        token in text for token in ("busy", "claim_interface", "resource")
     ):
         return CHANNEL_BUSY_MESSAGE
     return f"{type(exc).__name__}: {exc}"
+
+
+def _is_retryable_display_error(exc: Exception) -> bool:
+    """Return whether an automatic resume may succeed after devices settle."""
+    if isinstance(exc, (PermissionError, DeviceSafetyError, usb.core.USBError)):
+        return True
+    if type(exc).__module__.partition(".")[0] == "hid":
+        return True
+    text = str(exc).casefold()
+    return any(
+        token in text
+        for token in (
+            "access",
+            "busy",
+            "claim_interface",
+            "denied",
+            "found 0",
+            "not found",
+            "permission",
+            "resource",
+        )
+    )
 
 
 def _upload_directory() -> Path:
@@ -262,7 +288,12 @@ class PlaybackController:
         with self._lock:
             return self._preview_jpeg
 
-    def start(self, media: str) -> None:
+    def start(
+        self,
+        media: str,
+        *,
+        retry_transient_errors: bool = False,
+    ) -> None:
         path = Path(media).expanduser().resolve()
 
         with self._lock:
@@ -317,19 +348,22 @@ class PlaybackController:
             self._preview_jpeg = preview_jpeg
             self._thread = threading.Thread(
                 target=self._play_worker,
-                args=(frame_source, stop_event),
+                args=(frame_source, stop_event, retry_transient_errors),
                 name="b360gt-playback",
                 daemon=True,
             )
             self._thread.start()
 
-    def start_selected(self) -> None:
+    def start_selected(self, *, retry_transient_errors: bool = False) -> None:
         with self._lock:
             media = self._status.get("media")
             library_id = self._status.get("library_id")
         if not media or not library_id:
             raise ValueError("请先从媒体库选择或上传文件")
-        self.start(str(media))
+        self.start(
+            str(media),
+            retry_transient_errors=retry_transient_errors,
+        )
 
     def switch_media(
         self,
@@ -386,28 +420,70 @@ class PlaybackController:
         self,
         frame_source: SwitchableMediaFrames,
         stop_event: threading.Event,
+        retry_transient_errors: bool = False,
     ) -> None:
-        def update_progress(written: int) -> None:
-            with self._lock:
-                self._status["state"] = "playing"
-                self._status["bytes_streamed"] = written
-
+        total_written = 0
+        retry_delay = AUTO_RESUME_RETRY_INITIAL_SECONDS
         try:
-            written = stream_frames(
-                frame_source,
-                repeat_rate=DISPLAY_KEEPALIVE_RATE,
-                stop_event=stop_event,
-                frame_change_event=frame_source.changed,
-                progress_callback=update_progress,
-            )
-        except Exception as exc:
-            with self._lock:
-                self._status["state"] = "error"
-                self._status["error"] = _playback_error_message(exc)
-        else:
+            while not stop_event.is_set():
+                session_written = 0
+
+                def update_progress(written: int) -> None:
+                    nonlocal session_written
+                    session_written = written
+                    with self._lock:
+                        self._status["state"] = "playing"
+                        self._status["bytes_streamed"] = total_written + written
+                        self._status["error"] = None
+
+                try:
+                    written = stream_frames(
+                        frame_source,
+                        repeat_rate=DISPLAY_KEEPALIVE_RATE,
+                        stop_event=stop_event,
+                        frame_change_event=frame_source.changed,
+                        progress_callback=update_progress,
+                    )
+                except Exception as exc:
+                    total_written += session_written
+                    if not (
+                        retry_transient_errors
+                        and _is_retryable_display_error(exc)
+                        and not stop_event.is_set()
+                    ):
+                        with self._lock:
+                            self._status["state"] = "error"
+                            self._status["bytes_streamed"] = total_written
+                            self._status["error"] = _playback_error_message(exc)
+                        return
+
+                    message = _playback_error_message(exc)
+                    logger.warning(
+                        "Automatic display resume failed; retrying in %.1fs: %s: %s",
+                        retry_delay,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    with self._lock:
+                        self._status["state"] = "starting"
+                        self._status["bytes_streamed"] = total_written
+                        self._status["error"] = (
+                            f"{message}；将在 {retry_delay:g} 秒后自动重试"
+                        )
+                    if stop_event.wait(retry_delay):
+                        break
+                    retry_delay = min(
+                        retry_delay * 2,
+                        AUTO_RESUME_RETRY_MAX_SECONDS,
+                    )
+                    continue
+                else:
+                    total_written += max(written, session_written)
+                    break
+
             with self._lock:
                 self._status["state"] = "idle"
-                self._status["bytes_streamed"] = written
+                self._status["bytes_streamed"] = total_written
                 self._status["error"] = None
         finally:
             with self._lock:
@@ -489,7 +565,7 @@ class UiServer(ThreadingHTTPServer):
                 preview_jpeg=selected.preview_path.read_bytes(),
             )
             if self.library.desired_running():
-                self.playback.start_selected()
+                self.playback.start_selected(retry_transient_errors=True)
         elif self.library.desired_running():
             self.library.remember_running(False)
 

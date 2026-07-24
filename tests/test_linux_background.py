@@ -1,5 +1,6 @@
 import subprocess
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from b360gt import linux_background
@@ -15,6 +16,19 @@ def result(returncode=0, stdout="", stderr=""):
 
 
 class LinuxBackgroundTests(unittest.TestCase):
+    def test_packaged_ui_service_follows_graphical_session(self):
+        service = (
+            Path(__file__).parents[1]
+            / "packaging"
+            / "arch"
+            / "b360gt-ui.service"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("After=graphical-session.target", service)
+        self.assertIn("PartOf=graphical-session.target", service)
+        self.assertIn("WantedBy=graphical-session.target", service)
+        self.assertNotIn("WantedBy=default.target", service)
+
     def test_status_reports_active_service_pid(self):
         with patch.object(
             linux_background,

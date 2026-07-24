@@ -76,6 +76,17 @@ automatically at login:
 systemctl --user enable --now b360gt-ui.service
 ```
 
+When upgrading from `1.0.0rc2`, move the existing enablement from the generic
+user target to the graphical-session target:
+
+```bash
+systemctl --user reenable b360gt-ui.service
+```
+
+At login, saved playback waits for the graphical session and automatically
+retries transient USB, HID, or `uaccess` failures with bounded exponential
+backoff. Exact retry errors are recorded in the user journal.
+
 Inspect service logs with:
 
 ```bash
