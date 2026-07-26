@@ -34,10 +34,15 @@ DISPLAY_ENDPOINT = 0x04
 USB_CHUNK_SIZE = 65536
 MAX_REPEAT_RATE = 30.0
 DISPLAY_PREROLL_FRAMES = 2
+SUSPEND_CLOCK_SHIFT_SECONDS = 0.5
 
 
 class DeviceSafetyError(RuntimeError):
     """Raised when the connected device does not match the verified interface."""
+
+
+class DisplaySessionReset(DeviceSafetyError):
+    """Raised when system suspend has invalidated an active display session."""
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,15 @@ class DeviceInfo:
     interface_number: int
     endpoint_address: int
     endpoint_max_packet_size: int
+
+
+def _suspend_clock_offset() -> float | None:
+    """Return a Linux clock offset that increases by time spent suspended."""
+    clock_boottime = getattr(time, "CLOCK_BOOTTIME", None)
+    clock_gettime = getattr(time, "clock_gettime", None)
+    if os.name != "posix" or clock_boottime is None or clock_gettime is None:
+        return None
+    return clock_gettime(clock_boottime) - time.monotonic()
 
 
 def _backend():
@@ -303,6 +317,7 @@ def stream_frames(
                 progress_callback(total)
         enable_after_first_frame(control)
         display_enabled = True
+        suspend_clock_offset = _suspend_clock_offset()
 
         start = time.monotonic()
         deadline = None if duration_seconds is None else start + duration_seconds
@@ -337,6 +352,16 @@ def stream_frames(
             while True:
                 if stop_event is not None and stop_event.is_set():
                     return total
+                current_suspend_clock_offset = _suspend_clock_offset()
+                if (
+                    suspend_clock_offset is not None
+                    and current_suspend_clock_offset is not None
+                    and current_suspend_clock_offset - suspend_clock_offset
+                    >= SUSPEND_CLOCK_SHIFT_SECONDS
+                ):
+                    raise DisplaySessionReset(
+                        "System resumed from suspend; reopening the USB display session"
+                    )
                 now = time.monotonic()
                 if deadline is not None and now >= deadline:
                     return total

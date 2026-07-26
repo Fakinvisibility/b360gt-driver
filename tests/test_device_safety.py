@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from threading import Event
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import usb.core
 
@@ -14,6 +14,7 @@ from b360gt.device_init import (
 )
 from b360gt.usb_transport import (
     DeviceSafetyError,
+    DisplaySessionReset,
     find_display,
     probe,
     stream_frames,
@@ -170,6 +171,37 @@ class DeviceSafetyTests(unittest.TestCase):
                 stream_frames([(b"frame", 0.01)])
 
         self.assertIs(raised.exception, transfer_error)
+
+    def test_suspend_forces_a_fresh_usb_session_when_writes_do_not_fail(self) -> None:
+        channel = FakeFeatureChannel()
+        interface = object()
+
+        with (
+            patch("b360gt.usb_transport.os.name", "posix"),
+            patch("b360gt.usb_transport.find_display", return_value=FakeDisplay()),
+            patch("b360gt.usb_transport.validate_display_interface"),
+            patch("b360gt.usb_transport.open_feature_channel", return_value=channel),
+            patch("b360gt.usb_transport.initialize_display"),
+            patch("b360gt.usb_transport.enable_after_first_frame"),
+            patch("b360gt.usb_transport.disable_display"),
+            patch(
+                "b360gt.usb_transport.usb.util.find_descriptor",
+                return_value=interface,
+            ),
+            patch("b360gt.usb_transport.usb.util.claim_interface"),
+            patch("b360gt.usb_transport.usb.util.release_interface") as release,
+            patch("b360gt.usb_transport.usb.util.dispose_resources") as dispose,
+            patch("b360gt.usb_transport._write_frame", return_value=1),
+            patch(
+                "b360gt.usb_transport._suspend_clock_offset",
+                side_effect=(100.0, 101.0),
+            ),
+        ):
+            with self.assertRaises(DisplaySessionReset):
+                stream_frames([(b"frame", 1.0)])
+
+        release.assert_called_once_with(ANY, interface)
+        dispose.assert_called_once()
 
     def test_hid_open_failure_disposes_the_enumerated_usb_device(self) -> None:
         device = FakeDisplay()
