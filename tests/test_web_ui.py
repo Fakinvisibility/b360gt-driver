@@ -232,29 +232,43 @@ class WebUiTests(unittest.TestCase):
             self.assertEqual(controller.status()["bytes_streamed"], 123)
             self.assertIsNone(controller.status()["error"])
 
-    def test_manual_play_does_not_retry_transient_usb_failure(self) -> None:
+    def test_manual_play_retries_transient_usb_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "preview.png"
             Image.new("RGB", (32, 32), "green").save(path)
             controller = PlaybackController()
             controller.select_media(path, library_id="a" * 32)
+            attempts = 0
 
-            with patch(
-                "b360gt.web_ui.stream_frames",
-                side_effect=PermissionError("access denied"),
-            ) as stream:
+            def transient_stream(_frames, *, progress_callback, **_kwargs):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise usb.core.USBError("No such device")
+                progress_callback(123)
+                return 123
+
+            with (
+                patch(
+                    "b360gt.web_ui.stream_frames",
+                    side_effect=transient_stream,
+                ),
+                patch(
+                    "b360gt.web_ui.AUTO_RESUME_RETRY_INITIAL_SECONDS",
+                    0.01,
+                ),
+                self.assertLogs("b360gt.web_ui", level="WARNING"),
+            ):
                 controller.start_selected()
                 thread = controller._thread
                 self.assertIsNotNone(thread)
                 thread.join(timeout=1)
 
             self.assertFalse(thread.is_alive())
-            stream.assert_called_once()
-            self.assertEqual(controller.status()["state"], "error")
-            self.assertEqual(
-                controller.status()["error"],
-                CHANNEL_PERMISSION_MESSAGE,
-            )
+            self.assertEqual(attempts, 2)
+            self.assertEqual(controller.status()["state"], "idle")
+            self.assertEqual(controller.status()["bytes_streamed"], 123)
+            self.assertIsNone(controller.status()["error"])
 
     def test_page_omits_redundant_heading_and_external_path_controls(self) -> None:
         html = files("b360gt").joinpath("web", "index.html").read_text(encoding="utf-8")

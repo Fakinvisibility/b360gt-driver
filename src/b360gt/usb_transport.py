@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from collections.abc import Callable, Iterable
@@ -23,6 +24,8 @@ from .device_init import (
     open_feature_channel,
 )
 from .protocol import FRAME_HEADER, FRAME_SIZE, FRAME_TRAILER
+
+logger = logging.getLogger(__name__)
 
 VID = 0x345F
 PID = 0x9132
@@ -346,17 +349,48 @@ def stream_frames(
                 already_sent = False
         return total
     finally:
+        # A suspend/resume USB reset invalidates both the HID handle and the
+        # interface claim. Cleanup must be best-effort: otherwise a secondary
+        # "did not claim interface" error can mask the transfer error that the
+        # playback controller uses to reopen and re-enumerate the device.
+        cleanup_actions: list[tuple[str, Callable[[], object]]] = []
         if display_enabled:
-            disable_display(control)
+            cleanup_actions.append(
+                ("disable display", lambda: disable_display(control))
+            )
         if claimed:
-            usb.util.release_interface(device, interface)
+            cleanup_actions.append(
+                (
+                    "release display interface",
+                    lambda: usb.util.release_interface(device, interface),
+                )
+            )
         if detached_kernel_driver:
+            cleanup_actions.append(
+                (
+                    "reattach kernel driver",
+                    lambda: device.attach_kernel_driver(DISPLAY_INTERFACE),
+                )
+            )
+        cleanup_actions.extend(
+            (
+                ("close HID channel", control.close),
+                (
+                    "dispose USB resources",
+                    lambda: usb.util.dispose_resources(device),
+                ),
+            )
+        )
+        for description, action in cleanup_actions:
             try:
-                device.attach_kernel_driver(DISPLAY_INTERFACE)
-            except (NotImplementedError, usb.core.USBError):
-                pass
-        control.close()
-        usb.util.dispose_resources(device)
+                action()
+            except Exception as exc:
+                logger.warning(
+                    "Could not %s after display session ended: %s: %s",
+                    description,
+                    type(exc).__name__,
+                    exc,
+                )
 
 
 def _write_frame(device: usb.core.Device, frame: bytes, timeout_ms: int) -> int:

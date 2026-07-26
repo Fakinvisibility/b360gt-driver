@@ -15,6 +15,14 @@ from PIL import Image, ImageDraw, ImageFont
 POSITIONS = {"top-left", "top-right", "bottom-left", "bottom-right"}
 REFRESH_RATES = {0.5, 1.0, 2.0, 5.0}
 GPU_REFRESH_SECONDS = 5.0
+OVERLAY_FONT_PATHS = (
+    Path("/usr/share/fonts/TTF/Hack-Regular.ttf"),
+    Path("/usr/share/fonts/TTF/DejaVuSans.ttf"),
+    Path("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"),
+    Path("C:/Windows/Fonts/segoeui.ttf"),
+    Path("/usr/share/fonts/noto/NotoSans-Regular.ttf"),
+)
+OVERLAY_REQUIRED_GLYPHS = "NET0123456789.%°CKM/s↓↑"
 
 
 @dataclass(frozen=True)
@@ -245,7 +253,7 @@ def render_overlay(
 ) -> Image.Image:
     canvas = image.convert("RGBA")
     lines = _dashboard_lines(telemetry)
-    font = ImageFont.load_default(size=16)
+    font = _overlay_font(16)
     line_height = 22
     width = max(205, max(font.getlength(line) for line in lines) + 28)
     height = len(lines) * line_height + 24
@@ -277,6 +285,27 @@ def _dashboard_lines(value: Telemetry) -> list[str]:
         f"RAM {fmt(value.memory_percent, '%')}  DISK {fmt(value.disk_percent, '%')}",
         f"NET ↓{_rate(value.network_down_bps)} ↑{_rate(value.network_up_bps)}",
     ]
+
+
+def _overlay_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load a font with arrow glyphs instead of Pillow's limited bitmap font."""
+    for path in OVERLAY_FONT_PATHS:
+        if path.is_file():
+            font = ImageFont.truetype(path, size=size)
+            if _font_supports(font, OVERLAY_REQUIRED_GLYPHS):
+                return font
+    return ImageFont.load_default(size=size)
+
+
+def _font_supports(font: ImageFont.FreeTypeFont, text: str) -> bool:
+    """Reject glyphs that FreeType substituted with the font's .notdef box."""
+    missing = font.getmask("\uffff")
+    missing_pixels = bytes(missing)
+    return all(
+        (glyph := font.getmask(character)).size != missing.size
+        or bytes(glyph) != missing_pixels
+        for character in text
+    )
 
 
 def _rate(value: float | None) -> str:

@@ -4,6 +4,8 @@ import unittest
 from threading import Event
 from unittest.mock import patch
 
+import usb.core
+
 from b360gt.device_init import (
     DISPLAY_DISABLE_REPORT,
     HEARTBEAT_REPORT,
@@ -132,6 +134,37 @@ class DeviceSafetyTests(unittest.TestCase):
         self.assertIn(latest, sent)
         self.assertNotIn(stale, sent)
         self.assertEqual(sent[-1], b"disabled")
+
+    def test_usb_reset_cleanup_does_not_mask_transfer_error(self) -> None:
+        channel = FakeFeatureChannel()
+        interface = object()
+        transfer_error = usb.core.USBError("No such device")
+
+        with (
+            patch("b360gt.usb_transport.os.name", "posix"),
+            patch("b360gt.usb_transport.find_display", return_value=FakeDisplay()),
+            patch("b360gt.usb_transport.validate_display_interface"),
+            patch("b360gt.usb_transport.open_feature_channel", return_value=channel),
+            patch("b360gt.usb_transport.initialize_display"),
+            patch("b360gt.usb_transport.usb.util.find_descriptor", return_value=interface),
+            patch("b360gt.usb_transport.usb.util.claim_interface"),
+            patch(
+                "b360gt.usb_transport.usb.util.release_interface",
+                side_effect=usb.core.USBError(
+                    "did not claim interface 3 before use"
+                ),
+            ),
+            patch("b360gt.usb_transport.usb.util.dispose_resources"),
+            patch(
+                "b360gt.usb_transport._write_frame",
+                side_effect=transfer_error,
+            ),
+            self.assertLogs("b360gt.usb_transport", level="WARNING"),
+        ):
+            with self.assertRaises(usb.core.USBError) as raised:
+                stream_frames([(b"frame", 0.01)])
+
+        self.assertIs(raised.exception, transfer_error)
 
 
 if __name__ == "__main__":

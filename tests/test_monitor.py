@@ -5,19 +5,39 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import Image
+from PIL import Image, ImageFont
 
 from b360gt.monitor import (
     OverlayConfig,
     ReadOnlyMonitor,
     Telemetry,
+    _dashboard_lines,
     _linux_drm_metrics,
     _nvidia_metrics,
+    _overlay_font,
     render_overlay,
 )
 
 
 class MonitorTests(unittest.TestCase):
+    def test_dashboard_uses_network_direction_arrows(self) -> None:
+        line = _dashboard_lines(
+            Telemetry(network_down_bps=1024, network_up_bps=2048)
+        )[-1]
+
+        self.assertEqual(line, "NET ↓1K/s ↑2K/s")
+
+    def test_overlay_loads_packaged_system_font_with_arrow_glyphs(self) -> None:
+        font = _overlay_font(16)
+        missing = font.getmask("\uffff")
+
+        self.assertIsInstance(font, ImageFont.FreeTypeFont)
+        for character in "↓↑":
+            glyph = font.getmask(character)
+            self.assertTrue(
+                glyph.size != missing.size or bytes(glyph) != bytes(missing)
+            )
+
     def test_config_rejects_unknown_position_and_refresh(self) -> None:
         with self.assertRaises(ValueError):
             OverlayConfig.parse({"position": "center"})
