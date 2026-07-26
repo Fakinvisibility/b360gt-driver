@@ -156,8 +156,25 @@ def validate_display_interface(device: usb.core.Device) -> DeviceInfo:
 
 def probe() -> DeviceInfo:
     """Read and validate descriptors without claiming or writing the interface."""
-    find_hid_interface()
-    return validate_display_interface(find_display())
+    device = find_display()
+    try:
+        info = validate_display_interface(device)
+        find_hid_interface()
+        return info
+    finally:
+        # Descriptor probing still opens a libusb device context.  In
+        # particular after suspend/resume, keeping that context around can
+        # retain the pre-reset device instance while HID is still settling.
+        try:
+            usb.util.dispose_resources(device)
+        except Exception as exc:
+            # A reset can invalidate the context before it is disposed.  Keep
+            # the discovery error, since that is what the retry loop needs.
+            logger.warning(
+                "Could not dispose USB resources after probe: %s: %s",
+                type(exc).__name__,
+                exc,
+            )
 
 
 def send_frame(frame: bytes, *, timeout_ms: int = 5000) -> int:
@@ -240,13 +257,16 @@ def stream_frames(
     except StopIteration as exc:
         raise ValueError("frames must contain at least one item") from exc
 
-    device = find_display()
-    validate_display_interface(device)
-    control = open_feature_channel(device)
+    device = None
+    control = None
+    interface = None
     claimed = False
     detached_kernel_driver = False
     display_enabled = False
     try:
+        device = find_display()
+        validate_display_interface(device)
+        control = open_feature_channel(device)
         initialize_display(control)
 
         configuration = device.get_active_configuration()
@@ -354,33 +374,33 @@ def stream_frames(
         # "did not claim interface" error can mask the transfer error that the
         # playback controller uses to reopen and re-enumerate the device.
         cleanup_actions: list[tuple[str, Callable[[], object]]] = []
-        if display_enabled:
+        if display_enabled and control is not None:
             cleanup_actions.append(
                 ("disable display", lambda: disable_display(control))
             )
-        if claimed:
+        if claimed and device is not None and interface is not None:
             cleanup_actions.append(
                 (
                     "release display interface",
                     lambda: usb.util.release_interface(device, interface),
                 )
             )
-        if detached_kernel_driver:
+        if detached_kernel_driver and device is not None:
             cleanup_actions.append(
                 (
                     "reattach kernel driver",
                     lambda: device.attach_kernel_driver(DISPLAY_INTERFACE),
                 )
             )
-        cleanup_actions.extend(
-            (
-                ("close HID channel", control.close),
+        if control is not None:
+            cleanup_actions.append(("close HID channel", control.close))
+        if device is not None:
+            cleanup_actions.append(
                 (
                     "dispose USB resources",
                     lambda: usb.util.dispose_resources(device),
-                ),
+                )
             )
-        )
         for description, action in cleanup_actions:
             try:
                 action()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import subprocess
 import sys
 import threading
@@ -255,7 +256,9 @@ def render_overlay(
     lines = _dashboard_lines(telemetry)
     font = _overlay_font(16)
     line_height = 22
-    width = max(205, max(font.getlength(line) for line in lines) + 28)
+    # Pillow accepts fractional text advances, but image dimensions must be
+    # integers. Round up so the final glyph is never clipped.
+    width = max(205, math.ceil(max(font.getlength(line) for line in lines) + 28))
     height = len(lines) * line_height + 24
     margin = 18
     x = margin if config.position.endswith("left") else canvas.width - width - margin

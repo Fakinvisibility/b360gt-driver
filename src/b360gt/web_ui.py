@@ -737,7 +737,11 @@ class UiHandler(BaseHTTPRequestHandler):
                     self.server.library.remember_running(True)
                 else:
                     self.server.library.remember_running(False)
-                    self.server.playback.stop()
+                    # Do not acknowledge "off" while the old USB recovery
+                    # session is still alive.  Otherwise a quick off/on after
+                    # resume races start_selected() against that stale worker
+                    # and the user cannot force a fresh enumeration.
+                    self.server.playback.stop_and_wait()
                 self._json(HTTPStatus.ACCEPTED, {"ok": True, "enabled": enabled})
                 return
             if path == "/api/play":

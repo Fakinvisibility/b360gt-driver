@@ -92,6 +92,21 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(result.mode, "RGB")
         self.assertNotEqual(result.getpixel((455, 455)), image.getpixel((455, 455)))
 
+    def test_overlay_accepts_fractional_text_width(self) -> None:
+        image = Image.new("RGB", (480, 480), "navy")
+        font = _overlay_font(16)
+        with (
+            patch("b360gt.monitor._overlay_font", return_value=font),
+            patch.object(font, "getlength", return_value=205.5),
+        ):
+            result = render_overlay(
+                image,
+                Telemetry(cpu_percent=25),
+                OverlayConfig(enabled=True),
+            )
+
+        self.assertEqual(result.size, (480, 480))
+
     def test_overlay_keeps_pixels_outside_rounded_corners_transparent(self) -> None:
         image = Image.new("RGB", (480, 480), (12, 34, 56))
         result = render_overlay(
