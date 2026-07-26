@@ -12,7 +12,12 @@ from b360gt.device_init import (
     disable_display,
     issue_report,
 )
-from b360gt.usb_transport import DeviceSafetyError, find_display, stream_frames
+from b360gt.usb_transport import (
+    DeviceSafetyError,
+    find_display,
+    probe,
+    stream_frames,
+)
 
 
 class FakeFeatureChannel:
@@ -165,6 +170,46 @@ class DeviceSafetyTests(unittest.TestCase):
                 stream_frames([(b"frame", 0.01)])
 
         self.assertIs(raised.exception, transfer_error)
+
+    def test_hid_open_failure_disposes_the_enumerated_usb_device(self) -> None:
+        device = FakeDisplay()
+
+        with (
+            patch("b360gt.usb_transport.find_display", return_value=device),
+            patch("b360gt.usb_transport.validate_display_interface"),
+            patch(
+                "b360gt.usb_transport.open_feature_channel",
+                side_effect=RuntimeError("Expected one HID interface, found 0"),
+            ),
+            patch("b360gt.usb_transport.usb.util.dispose_resources") as dispose,
+        ):
+            with self.assertRaises(RuntimeError):
+                stream_frames([(b"frame", 0.01)])
+
+        dispose.assert_called_once_with(device)
+
+    def test_probe_disposes_usb_context_when_hid_is_still_missing(self) -> None:
+        device = FakeDisplay()
+        discovery_error = RuntimeError("Expected one HID interface, found 0")
+
+        with (
+            patch("b360gt.usb_transport.find_display", return_value=device),
+            patch("b360gt.usb_transport.validate_display_interface"),
+            patch(
+                "b360gt.usb_transport.find_hid_interface",
+                side_effect=discovery_error,
+            ),
+            patch(
+                "b360gt.usb_transport.usb.util.dispose_resources",
+                side_effect=usb.core.USBError("No such device"),
+            ) as dispose,
+            self.assertLogs("b360gt.usb_transport", level="WARNING"),
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                probe()
+
+        self.assertIs(raised.exception, discovery_error)
+        dispose.assert_called_once_with(device)
 
 
 if __name__ == "__main__":
