@@ -11,13 +11,65 @@ from b360gt.monitor import (
     OverlayConfig,
     ReadOnlyMonitor,
     Telemetry,
+    _dashboard_lines,
+    _font_supports,
     _linux_drm_metrics,
     _nvidia_metrics,
+    _overlay_font,
     render_overlay,
 )
 
 
 class MonitorTests(unittest.TestCase):
+    def test_dashboard_uses_network_direction_arrows(self) -> None:
+        line = _dashboard_lines(
+            Telemetry(network_down_bps=1024, network_up_bps=2048)
+        )[-1]
+
+        self.assertEqual(line, "NET ↓1K/s ↑2K/s")
+
+    def test_overlay_skips_font_without_required_glyphs(self) -> None:
+        missing_font = object()
+        supported_font = object()
+        with (
+            patch(
+                "b360gt.monitor.OVERLAY_FONT_PATHS",
+                (Path("/missing.ttf"), Path("/supported.ttf")),
+            ),
+            patch("b360gt.monitor.Path.is_file", return_value=True),
+            patch(
+                "b360gt.monitor.ImageFont.truetype",
+                side_effect=(missing_font, supported_font),
+            ),
+            patch(
+                "b360gt.monitor._font_supports",
+                side_effect=(False, True),
+            ) as supports,
+        ):
+            font = _overlay_font(16)
+
+        self.assertIs(font, supported_font)
+        self.assertEqual(supports.call_args_list[0].args[0], missing_font)
+        self.assertEqual(supports.call_args_list[1].args[0], supported_font)
+
+    def test_font_support_rejects_missing_glyph_substitution(self) -> None:
+        class FakeMask:
+            def __init__(self, pixels: bytes) -> None:
+                self.size = (1, 1)
+                self._pixels = pixels
+
+            def __bytes__(self) -> bytes:
+                return self._pixels
+
+        class FakeFont:
+            def getmask(self, character: str) -> FakeMask:
+                pixels = b"glyph" if character == "A" else b"missing"
+                return FakeMask(pixels)
+
+        font = FakeFont()
+        self.assertTrue(_font_supports(font, "A"))
+        self.assertFalse(_font_supports(font, "A↑"))
+
     def test_config_rejects_unknown_position_and_refresh(self) -> None:
         with self.assertRaises(ValueError):
             OverlayConfig.parse({"position": "center"})

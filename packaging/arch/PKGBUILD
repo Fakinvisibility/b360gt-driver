@@ -1,6 +1,6 @@
 pkgname=b360gt
 pkgver=1.0.0rc3
-pkgrel=1
+pkgrel=2
 pkgdesc="Userspace image and video driver for the Valkyrie B360GT USB display"
 arch=('x86_64')
 url="https://github.com/Fakinvisibility/b360gt-driver"
@@ -14,6 +14,7 @@ depends=(
   'python-pillow'
   'python-psutil'
   'python-pyusb'
+  'ttf-hack'
 )
 makedepends=(
   'python-build'

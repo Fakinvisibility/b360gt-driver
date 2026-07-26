@@ -292,7 +292,7 @@ class PlaybackController:
         self,
         media: str,
         *,
-        retry_transient_errors: bool = False,
+        retry_transient_errors: bool = True,
     ) -> None:
         path = Path(media).expanduser().resolve()
 
@@ -354,7 +354,7 @@ class PlaybackController:
             )
             self._thread.start()
 
-    def start_selected(self, *, retry_transient_errors: bool = False) -> None:
+    def start_selected(self, *, retry_transient_errors: bool = True) -> None:
         with self._lock:
             media = self._status.get("media")
             library_id = self._status.get("library_id")
@@ -420,7 +420,7 @@ class PlaybackController:
         self,
         frame_source: SwitchableMediaFrames,
         stop_event: threading.Event,
-        retry_transient_errors: bool = False,
+        retry_transient_errors: bool = True,
     ) -> None:
         total_written = 0
         retry_delay = AUTO_RESUME_RETRY_INITIAL_SECONDS
@@ -731,7 +731,9 @@ class UiHandler(BaseHTTPRequestHandler):
                 if not isinstance(enabled, bool):
                     raise ValueError("enabled 必须是布尔值")
                 if enabled:
-                    self.server.playback.start_selected()
+                    self.server.playback.start_selected(
+                        retry_transient_errors=True
+                    )
                     self.server.library.remember_running(True)
                 else:
                     self.server.library.remember_running(False)
@@ -739,7 +741,9 @@ class UiHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.ACCEPTED, {"ok": True, "enabled": enabled})
                 return
             if path == "/api/play":
-                self.server.playback.start_selected()
+                self.server.playback.start_selected(
+                    retry_transient_errors=True
+                )
                 self.server.library.remember_running(True)
                 self._json(HTTPStatus.ACCEPTED, {"ok": True})
                 return
